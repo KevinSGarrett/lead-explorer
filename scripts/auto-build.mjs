@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import dotenv from "dotenv"; dotenv.config({path: ".env.local"}); dotenv.config();
 import fs from 'fs/promises';
 import path from 'path';
 import OpenAI from 'openai';
@@ -12,7 +12,7 @@ const exec = promisify(_exec);
 const DIRECTUS_URL = process.env.DIRECTUS_URL || process.env.NEXT_PUBLIC_DIRECTUS_URL || 'http://3.85.34.51:8055';
 const DIRECTUS_TOKEN = process.env.DIRECTUS_TOKEN || process.env.DIRECTUS_STATIC_TOKEN || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
-const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20240620';
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-latest';
 const ROOT = process.cwd();
 // ----------------------------
 
