@@ -1,8 +1,4 @@
-# save/exit, then:
-git add .github/workflows/ai-build.yml
-git commit -m "fix: proper setup-node step (ai-build)"
-git push --force-with-lease origin chore/ci-automation
-name: AI Build & Review (CrewAI + Claude/OpenAI)
+name: AI Build & Review
 
 on:
   push:
@@ -26,12 +22,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install CrewAI & SDKs
         run: |
@@ -58,19 +54,20 @@ jobs:
             fi
           fi
 
-      - name: Create/Update PR → main
+      - name: Create/Update PR to main
         uses: peter-evans/create-pull-request@v6
         with:
-          branch: "automation/ai-build"
-          base: "main"
-          title: "Automation: design refresh & AI build"
-          commit-message: "automation: design refresh & AI build"
+          branch: automation/ai-build
+          base: main
+          title: Automation: design refresh & AI build
+          commit-message: automation: design refresh & AI build
           body: |
             This PR was created by the AI Build pipeline.
             - Figma tokens synced
             - Locofy/TeleportHQ scaffolds updated
-            - CrewAI suggestions applied
+            - CrewAI notes included
           labels: |
             automation
             design-sync
           delete-branch: true
+
