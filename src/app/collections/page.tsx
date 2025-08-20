@@ -1,21 +1,33 @@
-// src/app/collections/page.tsx
 import client from '@/lib/directus';
 import { readCollections } from '@directus/sdk';
 import Link from 'next/link';
 
-export default async function CollectionsPage(){
+const GOLD = '#d4af37';
+const isCore = (name: string) => name.startsWith('directus_');
+
+export default async function CollectionsPage() {
   const collections = await client.request(readCollections());
-  const user = collections.filter((c: any) => !c?.meta?.system && !String(c.collection).startsWith('directus_'));
+  const list = collections
+    .map((c: any) => c.collection as string)
+    .filter((n) => !isCore(n))
+    .sort();
 
   return (
     <main className="min-h-screen bg-black text-white p-8">
-      <h1 className="text-3xl font-bold text-gold mb-6">Collections</h1>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {user.map((c:any)=>(
-          <Link key={c.collection} href={`/collections/${encodeURIComponent(c.collection)}`}
-            className="block border border-gold/60 rounded-xl p-4 hover:bg-gold hover:text-black transition">
-            <div className="text-lg font-semibold">{c.collection}</div>
-            {c?.meta?.note && <div className="text-sm opacity-80">{c.meta.note}</div>}
+      <h1 className="text-3xl font-bold mb-6" style={{ color: GOLD }}>
+        Collections
+      </h1>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {list.map((name) => (
+          <Link
+            key={name}
+            href={`/collections/${encodeURIComponent(name)}`}
+            className="block p-5 rounded-2xl border transition-colors hover:bg-[#d4af37]/10"
+            style={{ borderColor: GOLD }}
+          >
+            <div className="text-lg font-semibold">{name}</div>
+            <div className="text-white/60 text-sm mt-1">Click to view rows</div>
           </Link>
         ))}
       </div>

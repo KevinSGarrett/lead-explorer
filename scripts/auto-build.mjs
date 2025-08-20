@@ -1,85 +1,72 @@
-import dotenv from "dotenv"; dotenv.config({path: ".env.local"}); dotenv.config();
-import fs from 'fs/promises';
-import path from 'path';
-import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
-import { exec as _exec } from 'child_process';
-import { promisify } from 'util';
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
+dotenv.config();
 
-const exec = promisify(_exec);
+import fs from "fs/promises";
+import path from "path";
+import { execSync } from "node:child_process";
 
-// ---------- CONFIG ----------
-const DIRECTUS_URL = process.env.DIRECTUS_URL || process.env.NEXT_PUBLIC_DIRECTUS_URL || 'http://3.85.34.51:8055';
-const DIRECTUS_TOKEN = process.env.DIRECTUS_TOKEN || process.env.DIRECTUS_STATIC_TOKEN || '';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
-const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-latest';
-const ROOT = process.cwd();
-// ----------------------------
+// === Config ===
+const DIRECTUS_URL   = process.env.DIRECTUS_URL || process.env.NEXT_PUBLIC_DIRECTUS_URL;
+const DIRECTUS_TOKEN = process.env.DIRECTUS_STATIC_TOKEN || process.env.DIRECTUS_TOKEN;
+const USE_ANTHROPIC  = (process.env.USE_ANTHROPIC ?? "0") !== "0"; // currently ignored, OpenAI-only
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-async function ensureDir(p){ await fs.mkdir(p,{recursive:true}); }
-async function writeFileIfDiff(file, content){
-  try{
-    const cur = await fs.readFile(file,'utf8');
-    if(cur === content) return false;
-  }catch{}
-  await ensureDir(path.dirname(file));
-  await fs.writeFile(file, content, 'utf8');
-  return true;
+if (!DIRECTUS_URL || !DIRECTUS_TOKEN) {
+  console.error("❌ Missing DIRECTUS_URL or DIRECTUS_TOKEN in .env.local");
+  process.exit(1);
 }
 
-async function fetchJSON(url){
+const GOLD = "#d4af37";
+const isCore = (name) => name.startsWith("directus_");
+
+// Utilities
+async function ensureDir(p) { await fs.mkdir(p, { recursive: true }); }
+async function writeIfMissing(file, contents) {
+  try { await fs.access(file); return false; } catch {}
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(file, contents, "utf8");
+  return true;
+}
+async function fetchJSON(url, opts = {}) {
   const res = await fetch(url, {
-    headers: DIRECTUS_TOKEN ? { Authorization: `Bearer ${DIRECTUS_TOKEN}` } : {}
+    headers: { Authorization: `Bearer ${DIRECTUS_TOKEN}` },
+    ...opts,
   });
-  if(!res.ok){ throw new Error(`${res.status} ${res.statusText} for ${url}`); }
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`${res.status} ${res.statusText} for ${url}\n${t}`);
+  }
   return res.json();
 }
 
-function systemCollections(name){
-  return name.startsWith('directus_');
-}
-
-function baseDirectusClient(){
-  return `// src/lib/directus.ts
-import { createDirectus, rest, staticToken } from '@directus/sdk';
-
-const URL = process.env.NEXT_PUBLIC_DIRECTUS_URL || '${DIRECTUS_URL}';
-const TOKEN = process.env.DIRECTUS_STATIC_TOKEN || '${DIRECTUS_TOKEN}';
-
-const client = createDirectus(URL).with(rest()).with(staticToken(TOKEN));
-export default client;
-`;
-}
-
-function goldUtilities(){
-  return `/* gold helpers */
-.text-gold { color: #D4AF37; }
-.bg-gold { background-color: #D4AF37; }
-.border-gold { border-color: #D4AF37; }`;
-}
-
-function collectionsListPage(){
-  return `// src/app/collections/page.tsx
-import client from '@/lib/directus';
+// Page templates
+const collectionsPage = `import client from '@/lib/directus';
 import { readCollections } from '@directus/sdk';
 import Link from 'next/link';
 
-export default async function CollectionsPage(){
+const GOLD = '${GOLD}';
+const isCore = (name: string) => name.startsWith('directus_');
+
+export default async function CollectionsPage() {
   const collections = await client.request(readCollections());
-  const user = collections.filter((c: any) => !c?.meta?.system && !String(c.collection).startsWith('directus_'));
+  const list = collections
+    .map((c: any) => c.collection as string)
+    .filter((n) => !isCore(n))
+    .sort();
 
   return (
     <main className="min-h-screen bg-black text-white p-8">
-      <h1 className="text-3xl font-bold text-gold mb-6">Collections</h1>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {user.map((c:any)=>(
-          <Link key={c.collection} href={\`/collections/\${encodeURIComponent(c.collection)}\`}
-            className="block border border-gold/60 rounded-xl p-4 hover:bg-gold hover:text-black transition">
-            <div className="text-lg font-semibold">{c.collection}</div>
-            {c?.meta?.note && <div className="text-sm opacity-80">{c.meta.note}</div>}
+      <h1 className="text-3xl font-bold mb-6" style={{ color: GOLD }}>Collections</h1>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {list.map((name) => (
+          <Link
+            key={name}
+            href={\`/collections/\${encodeURIComponent(name)}\`}
+            className="block p-5 rounded-2xl border transition-colors hover:bg-[#d4af37]/10"
+            style={{ borderColor: GOLD }}
+          >
+            <div className="text-lg font-semibold">{name}</div>
+            <div className="text-white/60 text-sm mt-1">Click to view rows</div>
           </Link>
         ))}
       </div>
@@ -87,243 +74,152 @@ export default async function CollectionsPage(){
   );
 }
 `;
-}
 
-function fallbackCollectionPage(slug, columns){
-  const cols = columns.slice(0,12);
-  return `// src/app/collections/${slug}/page.tsx
-import client from '@/lib/directus';
-import { readItems, readFields } from '@directus/sdk';
+const collectionDetailPage = `import client from '@/lib/directus';
+import { readItems } from '@directus/sdk';
+import DataGrid from '@/components/ui/DataGrid';
 import Link from 'next/link';
 
 type Props = { params: Promise<{ slug: string }> };
+const GOLD = '${GOLD}';
 
-export default async function CollectionDetail({ params }: Props){
+export default async function CollectionDetail({ params }: Props) {
   const { slug } = await params;
-  const [rows, fields] = await Promise.all([
-    client.request(readItems(slug as any, { limit: 50 }) as any),
-    client.request(readFields(slug as any) as any),
-  ]);
 
-  const columns = ${JSON.stringify(cols)};
+  let rows: any[] = [];
+  try {
+    rows = await client.request(readItems(slug, { limit: 200 }));
+  } catch {
+    rows = [];
+  }
+
+  const sample = rows[0] ?? {};
+  const fieldCols = Object.keys(sample).slice(0, 12).map((key) => ({
+    header: key,
+    accessorKey: key,
+    cell: ({ getValue }: any) => {
+      const v = getValue();
+      return typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+    },
+  }));
+
+  const columns: any[] = [
+    {
+      header: 'View',
+      cell: ({ row }: any) => (
+        <Link
+          href={\`/collections/\${encodeURIComponent(slug)}/\${encodeURIComponent(row.original.id ?? '')}\`}
+          className="underline"
+          style={{ color: GOLD }}
+        >
+          Open
+        </Link>
+      ),
+    },
+    ...fieldCols,
+  ];
 
   return (
     <main className="min-h-screen bg-black text-white p-8">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold text-gold">{slug}</h1>
-        <Link href="/collections" className="underline hover:text-gold">← Back</Link>
+        <h1 className="text-3xl font-bold" style={{ color: GOLD }}>{slug}</h1>
+        <Link href="/collections" className="px-4 py-2 rounded-full border hover:bg-[#d4af37]/10" style={{ borderColor: GOLD, color: GOLD }}>
+          ← Back
+        </Link>
       </div>
-      <div className="overflow-auto rounded-xl border border-gold/60">
-        <table className="min-w-full text-left">
-          <thead className="bg-gold text-black">
-            <tr>{columns.map((c) => <th key={c} className="px-4 py-2 whitespace-nowrap">{c}</th>)}</tr>
-          </thead>
-          <tbody>
-            {rows.map((row:any)=>(
-              <tr key={row.id ?? JSON.stringify(row)} className="border-t border-gold/40 hover:bg-gold hover:text-black transition">
-                {columns.map((col)=>(
-                  <td key={col} className="px-4 py-2 whitespace-nowrap">
-                    <Link href={\`/collections/\${encodeURIComponent(slug)}/\${encodeURIComponent(row.id)}\`}>
-                      {row[col] === null || row[col] === undefined
-                        ? '—'
-                        : typeof row[col] === 'object' ? JSON.stringify(row[col]) : String(row[col])}
-                    </Link>
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid columns={columns} data={rows} title={\`\${slug} (first 200)\`} />
     </main>
   );
 }
 `;
-}
 
-function fallbackRecordPage(slug){
-  return `// src/app/collections/${slug}/[id]/page.tsx
-import client from '@/lib/directus';
+const recordDetailPage = `import client from '@/lib/directus';
 import { readItem } from '@directus/sdk';
 import Link from 'next/link';
 
 type Props = { params: Promise<{ slug: string; id: string }> };
+const GOLD = '${GOLD}';
 
-export default async function RecordDetail({ params }: Props){
+export default async function RecordDetail({ params }: Props) {
   const { slug, id } = await params;
-  const record = await client.request(readItem(slug as any, id as any) as any);
-  const entries = Object.entries(record ?? {});
+
+  let data: any = null;
+  try {
+    data = await client.request(readItem(slug, id));
+  } catch {
+    data = null;
+  }
 
   return (
     <main className="min-h-screen bg-black text-white p-8">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold text-gold">{slug} · {id}</h1>
-        <Link href={\`/collections/\${encodeURIComponent(slug)}\`} className="underline hover:text-gold">← Back to table</Link>
+        <h1 className="text-3xl font-bold" style={{ color: GOLD }}>{slug} / {id}</h1>
+        <Link href={\`/collections/\${encodeURIComponent(slug)}\`} className="px-4 py-2 rounded-full border hover:bg-[#d4af37]/10" style={{ borderColor: GOLD, color: GOLD }}>
+          ← Back to {slug}
+        </Link>
       </div>
-      <div className="grid gap-4 md:grid-cols-2">
-        {entries.map(([k,v])=>(
-          <div key={k} className="rounded-xl border border-gold/60 p-4">
-            <div className="text-sm uppercase tracking-wide opacity-70">{k}</div>
-            <div className="text-lg">
-              {v === null || v === undefined ? '—' : typeof v === 'object'
-                ? <pre className="whitespace-pre-wrap break-all">{JSON.stringify(v, null, 2)}</pre>
-                : String(v)}
+
+      {!data ? (
+        <div className="text-white/70">No data found.</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {Object.entries(data).map(([key, value]) => (
+            <div key={key} className="rounded-2xl border p-4 bg-black" style={{ borderColor: GOLD }}>
+              <div className="text-sm uppercase tracking-wide text-white/60">{key}</div>
+              <div className="mt-1 text-base">
+                {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '')}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </main>
   );
 }
 `;
-}
 
-async function aiGenerate(collection, fields, samples){
-  const schema = {
-    name: collection.collection,
-    fields: fields.map(f=>({ field: f.field, type: f.type, interface: f?.meta?.interface }))
-  };
+// Main
+async function main() {
+  console.log("🚀 Auto-build: reading Directus schema…");
+  const colRes = await fetchJSON(`${DIRECTUS_URL}/collections`);
+  const userCollections = (colRes.data || [])
+    .map((c) => c.collection)
+    .filter((n) => !isCore(n));
 
-  const userMessage = `
-Build TWO Next.js 15 app routes for a Directus collection:
-- Spreadsheet list: /src/app/collections/${collection.collection}/page.tsx
-- Detail page:      /src/app/collections/${collection.collection}/[id]/page.tsx
+  // Ensure the page shells exist (idempotent)
+  const wroteIndex = await writeIfMissing("src/app/collections/page.tsx", collectionsPage);
+  for (const col of userCollections) {
+    const detailPath = `src/app/collections/[slug]/page.tsx`;
+    const recordPath = `src/app/collections/[slug]/[id]/page.tsx`;
+    await writeIfMissing(detailPath, collectionDetailPage);
+    await writeIfMissing(recordPath, recordDetailPage);
+    console.log(`✅ ${col}: pages present`);
+  }
 
-Requirements:
-- Use black background, white text, gold accents (#D4AF37).
-- Import client from "@/lib/directus".
-- Use "@directus/sdk": readItems, readFields, readItem.
-- Next 15 dynamic params are PROMISES; example:
-  type Props = { params: Promise<{ slug: string; id?: string }> };
-  const { slug, id } = await params;
-- Spreadsheet view shows first ~12 visible fields as columns.
-- Detail page renders all fields in clean cards.
-- Link each row to its detail page.
-- No client-side fetch; render on server.
-- Return a JSON object with keys "list" and "detail" whose values are the FULL file contents.
-
-Context:
-SCHEMA: ${JSON.stringify(schema)}
-SAMPLE ROWS (trimmed): ${JSON.stringify(samples?.slice(0,3) ?? [])}
-`;
-
-  // 1) OpenAI drafts
-  const gpt = await openai.chat.completions.create({
-    model: OPENAI_MODEL,
-    messages: [
-      { role: 'system', content: 'You generate production-grade Next.js files.' },
-      { role: 'user', content: userMessage }
-    ],
-    temperature: 0.2
-  });
-
-  let draft;
+  // Git add/commit/push if a remote exists
   try {
-    draft = JSON.parse(gpt.choices?.[0]?.message?.content ?? '{}');
+    execSync("git rev-parse --is-inside-work-tree", { stdio: "ignore" });
+    execSync("git add -A", { stdio: "inherit" });
+    try {
+      execSync('git commit -m "autobuild: ensure pages present"', { stdio: "inherit" });
+    } catch {
+      // no changes
+    }
+    // push only if origin exists
+    try {
+      execSync("git remote get-url origin", { stdio: "ignore" });
+      execSync("git push -u origin main", { stdio: "inherit" });
+    } catch {
+      console.log("ℹ️ No remote 'origin' configured — skipping push.");
+    }
   } catch {
-    draft = {};
+    console.log("ℹ️ Not a git repo — skipping commit/push.");
   }
 
-  // 2) Claude reviews/refines
-  const claude = await anthropic.messages.create({
-    model: CLAUDE_MODEL,
-    max_tokens: 2000,
-    messages: [{
-      role: 'user',
-      content: `Improve these two files if needed. Return JSON {"list":"...","detail":"..."} ONLY.\n` +
-               `FILES JSON:\n${JSON.stringify(draft)}`
-    }]
-  });
-
-  let finalJSON;
-  try {
-    finalJSON = JSON.parse(claude.content?.[0]?.text ?? '{}');
-  } catch {
-    finalJSON = draft;
-  }
-
-  return finalJSON;
+  console.log("🎉 Auto-build complete.");
 }
 
-async function main(){
-  console.log('🚀 Auto-build: reading Directus schema…');
-  const all = await fetchJSON(`${DIRECTUS_URL}/collections`);
-  const collections = all.data.filter(c => !c?.meta?.system && !systemCollections(c.collection));
-
-  // Ensure src/app + lib + gold utilities + directus client exist
-  await ensureDir(path.join(ROOT, 'src/app/collections'));
-  await writeFileIfDiff(path.join(ROOT, 'src/lib/directus.ts'), baseDirectusClient());
-
-  // gold utilities
-  const globalsPath = path.join(ROOT, 'src/app/globals.css');
-  try{
-    const cur = await fs.readFile(globalsPath,'utf8');
-    if(!cur.includes('.text-gold')) {
-      await fs.writeFile(globalsPath, cur + '\n' + goldUtilities(), 'utf8');
-    }
-  }catch{
-    await ensureDir(path.dirname(globalsPath));
-    await fs.writeFile(globalsPath, goldUtilities(), 'utf8');
-  }
-
-  // Collections index
-  await writeFileIfDiff(path.join(ROOT, 'src/app/collections/page.tsx'), collectionsListPage());
-
-  let changed = false;
-
-  for(const collection of collections){
-    const [fieldsRes, itemsRes] = await Promise.all([
-      fetchJSON(`${DIRECTUS_URL}/fields/${encodeURIComponent(collection.collection)}`),
-      fetchJSON(`${DIRECTUS_URL}/items/${encodeURIComponent(collection.collection)}?limit=3`)
-    ]);
-    const fields = fieldsRes.data || [];
-    const samples = itemsRes.data || [];
-
-    console.log(`🧩 ${collection.collection}: generating with OpenAI + Claude…`);
-    let gen = {};
-    try{
-      gen = await aiGenerate(collection, fields, samples);
-    }catch(e){
-      console.error('AI generation failed, using fallbacks:', e.message);
-    }
-
-    // choose up to 12 visible fields
-    const cols = fields.filter((f)=>!f?.meta?.hidden).map(f=>f.field);
-
-    const listPath = path.join(ROOT, `src/app/collections/${collection.collection}/page.tsx`);
-    const detailPath = path.join(ROOT, `src/app/collections/${collection.collection}/[id]/page.tsx`);
-
-    const listContent = typeof gen.list === 'string' && gen.list.includes('export default') 
-      ? gen.list 
-      : fallbackCollectionPage(collection.collection, cols);
-
-    const detailContent = typeof gen.detail === 'string' && gen.detail.includes('export default')
-      ? gen.detail
-      : fallbackRecordPage(collection.collection);
-
-    const a = await writeFileIfDiff(listPath, listContent);
-    const b = await writeFileIfDiff(detailPath, detailContent);
-    changed = changed || a || b;
-
-    console.log(`✅ ${collection.collection}: pages ${(a||b)?'written/updated':'already up-to-date'}`);
-  }
-
-  // Git commit & push (uses your SSH or PAT config already set up)
-  if (changed){
-    console.log('📝 Committing & pushing…');
-    try{
-      await exec('git add .');
-      await exec('git commit -m "🤖 Auto-build: regenerate pages from Directus" || true');
-      await exec('git push origin main');
-      console.log('🚢 Pushed to origin/main');
-    }catch(e){
-      console.error('⚠️ git push failed:', e.message);
-    }
-  }else{
-    console.log('ℹ️ No changes detected.');
-  }
-
-  console.log('🎉 Auto-build complete.');
-}
-
-main().catch(e=>{ console.error('💥 Auto-build error:', e); process.exit(1); });
+main().catch((e) => {
+  console.error("💥 Auto-build error:", e);
+  process.exit(1);
+});
