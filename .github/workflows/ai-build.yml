@@ -2,7 +2,7 @@ name: AI Build & Review (CrewAI + Claude/OpenAI)
 
 on:
   push:
-    branches: [ "design-refresh" ]
+    branches: ["design-refresh"]
   workflow_dispatch:
 
 permissions:
@@ -16,10 +16,11 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Node
-      - uses: actions/setup-node@v4
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
@@ -34,17 +35,23 @@ jobs:
           pip install crewai openai anthropic tiktoken
 
       - name: Run CrewAI pipeline
-        run: |
-          python .github/crews/run_crews.py
+        run: python .github/crews/run_crews.py
 
       - name: JS install & checks (best-effort)
         run: |
           if [ -f package.json ]; then
-            corepack enable
-            pnpm install --frozen-lockfile || npm ci
-            npm run lint || true
-            npm run typecheck || true
-            npm test || true
+            corepack enable || true
+            if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then
+              pnpm install --frozen-lockfile
+              pnpm run lint || true
+              pnpm run typecheck || true
+              pnpm test || true
+            else
+              npm ci
+              npm run lint || true
+              npm run typecheck || true
+              npm test || true
+            fi
           fi
 
       - name: Create/Update PR → main
@@ -63,4 +70,3 @@ jobs:
             automation
             design-sync
           delete-branch: true
-
