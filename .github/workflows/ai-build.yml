@@ -1,3 +1,7 @@
+# save/exit, then:
+git add .github/workflows/ai-build.yml
+git commit -m "fix: proper setup-node step (ai-build)"
+git push --force-with-lease origin chore/ci-automation
 name: AI Build & Review (CrewAI + Claude/OpenAI)
 
 on:
