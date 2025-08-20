@@ -1,0 +1,65 @@
+name: Design → Code Sync
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "design/**"
+      - "scripts/figma/**"
+      - ".github/workflows/design-sync.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  design_sync:
+    runs-on: ubuntu-latest
+    env:
+      FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+      FIGMA_FILE_KEY: ${{ vars.FIGMA_FILE_KEY || secrets.FIGMA_FILE_KEY }}
+      ENABLE_TELEPORTHQ: ${{ vars.ENABLE_TELEPORTHQ }}
+      LOCOFY_EMAIL: ${{ secrets.LOCOFY_EMAIL }}
+      LOCOFY_PASSWORD: ${{ secrets.LOCOFY_PASSWORD }}
+      TELEPORTHQ_TOKEN: ${{ secrets.TELEPORTHQ_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps (if package.json exists)
+        run: |
+          if [ -f package.json ]; then
+            corepack enable
+            pnpm install --frozen-lockfile || npm ci
+          fi
+
+      - name: Pull Figma variables → design/tokens/figma-variables.json
+        run: |
+          node scripts/figma/pull-variables.js
+
+      - name: Generate CSS tokens from Figma variables
+        run: |
+          node scripts/figma/update-theme.js
+
+      - name: Locofy export (scaffold from approved frames)
+        run: |
+          bash scripts/locofy/export.sh
+
+      - name: TeleportHQ export (optional)
+        if: ${{ env.ENABLE_TELEPORTHQ == 'true' && env.TELEPORTHQ_TOKEN != '' }}
+        run: |
+          bash scripts/teleporthq/export.sh
+
+      - name: Commit changes to design-refresh
+        run: |
+          git config user.name "automation-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git checkout -B design-refresh
+          git add -A
+          git commit -m "chore(design): sync tokens & scaffolds" || echo "No changes to commit"
+          git push -f origin design-refresh
+
