@@ -1,13 +1,10 @@
-# paste the YAML above, save (Ctrl+O), exit (Ctrl+X)
-
-git add .github/workflows/design-sync.yml
-git commit -m "fix: proper setup-node step (design-sync)"
-git push
-name: Design → Code Sync
+name: Design Code Sync
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - chore/ci-automation
     paths:
       - "design/**"
       - "scripts/figma/**"
@@ -23,41 +20,42 @@ jobs:
     env:
       FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
       FIGMA_FILE_KEY: ${{ vars.FIGMA_FILE_KEY || secrets.FIGMA_FILE_KEY }}
-      ENABLE_TELEPORTHQ: ${{ vars.ENABLE_TELEPORTHQ }}
+      ENABLE_TELEPORTHQ: ${{ vars.ENABLE_TELEPORTHQ || 'false' }}
       LOCOFY_EMAIL: ${{ secrets.LOCOFY_EMAIL }}
       LOCOFY_PASSWORD: ${{ secrets.LOCOFY_PASSWORD }}
       TELEPORTHQ_TOKEN: ${{ secrets.TELEPORTHQ_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Node
-      - uses: actions/setup-node@v4
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
-      - name: Install deps (if package.json exists)
+      - name: Install deps (pnpm or npm)
         run: |
           if [ -f package.json ]; then
-            corepack enable
-            pnpm install --frozen-lockfile || npm ci
+            corepack enable || true
+            if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then
+              pnpm install --frozen-lockfile
+            else
+              npm ci
+            fi
           fi
 
-      - name: Pull Figma variables → design/tokens/figma-variables.json
-        run: |
-          node scripts/figma/pull-variables.js
+      - name: Pull Figma variables
+        run: node scripts/figma/pull-variables.js
 
-      - name: Generate CSS tokens from Figma variables
-        run: |
-          node scripts/figma/update-theme.js
+      - name: Generate CSS tokens
+        run: node scripts/figma/update-theme.js
 
-      - name: Locofy export (scaffold from approved frames)
-        run: |
-          bash scripts/locofy/export.sh
+      - name: Locofy export (optional)
+        run: bash scripts/locofy/export.sh
 
       - name: TeleportHQ export (optional)
         if: ${{ env.ENABLE_TELEPORTHQ == 'true' && env.TELEPORTHQ_TOKEN != '' }}
-        run: |
-          bash scripts/teleporthq/export.sh
+        run: bash scripts/teleporthq/export.sh
 
       - name: Commit changes to design-refresh
         run: |
