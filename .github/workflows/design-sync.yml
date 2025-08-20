@@ -8,6 +8,9 @@ on:
     paths:
       - "design/**"
       - "scripts/figma/**"
+      - "scripts/ai/**"
+      - "scripts/locofy/**"
+      - "scripts/teleporthq/**"
       - ".github/workflows/design-sync.yml"
 
 permissions:
@@ -44,18 +47,32 @@ jobs:
             fi
           fi
 
-      - name: Pull Figma variables
-        run: node scripts/figma/pull-variables.js
-
-      - name: Generate CSS tokens
-        run: node scripts/figma/update-theme.js
+      - name: Generate design tokens (Figma or AI)
+        run: |
+          if [ -n "${FIGMA_TOKEN}" ] && [ -n "${FIGMA_FILE_KEY}" ]; then
+            echo "Using Figma…"
+            node scripts/figma/pull-variables.js
+            node scripts/figma/update-theme.js
+          else
+            echo "Using AI fallback…"
+            node scripts/ai/generate-tokens.js
+          fi
 
       - name: Locofy export (optional)
-        run: bash scripts/locofy/export.sh
+        run: |
+          if [ -n "${LOCOFY_EMAIL}" ] && [ -n "${LOCOFY_PASSWORD}" ]; then
+            bash scripts/locofy/export.sh
+          else
+            echo "Skipping Locofy: credentials not set."
+          fi
 
       - name: TeleportHQ export (optional)
-        if: ${{ env.ENABLE_TELEPORTHQ == 'true' && env.TELEPORTHQ_TOKEN != '' }}
-        run: bash scripts/teleporthq/export.sh
+        run: |
+          if [ "${ENABLE_TELEPORTHQ}" = "true" ] && [ -n "${TELEPORTHQ_TOKEN}" ]; then
+            bash scripts/teleporthq/export.sh
+          else
+            echo "Skipping TeleportHQ: disabled or token missing."
+          fi
 
       - name: Commit changes to design-refresh
         run: |
