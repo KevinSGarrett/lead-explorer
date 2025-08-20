@@ -1,3 +1,8 @@
+# paste the YAML above, save (Ctrl+O), exit (Ctrl+X)
+
+git add .github/workflows/design-sync.yml
+git commit -m "fix: proper setup-node step (design-sync)"
+git push
 name: Design → Code Sync
 
 on:
