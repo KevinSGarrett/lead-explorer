@@ -21,37 +21,48 @@ export default async function CollectionDetail({ params }: { params: ParamsP }) 
           <pre className="text-xs opacity-70 whitespace-pre-wrap">{String(e)}</pre>
         </div>
         <div className="mt-4">
-          <Link href="/collections" className="underline" style={{ color: GOLD }}>
-            ← Back
-          </Link>
+          <Link href="/collections" className="underline" style={{ color: GOLD }}>← Back</Link>
         </div>
       </main>
     );
   }
 
-  // ⬇️ Only pass SERIALIZABLE data to the client grid
   const sample = rows[0] ?? {};
-  const columnKeys = Object.keys(sample).slice(0, 12);
+  const fieldCols = Object.keys(sample).slice(0, 12).map((key) => ({
+    header: key,
+    accessorKey: key,
+    cell: ({ getValue }: any) => {
+      const v = getValue();
+      return typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+    },
+  }));
+
+  const columns: any[] = [
+    {
+      header: 'View',
+      cell: ({ row }: any) => (
+        <Link
+          href={`/collections/${encodeURIComponent(slug)}/${encodeURIComponent(row.original.id ?? '')}`}
+          className="underline"
+          style={{ color: GOLD }}
+        >
+          Open
+        </Link>
+      ),
+    },
+    ...fieldCols,
+  ];
 
   return (
     <main className="min-h-screen bg-black text-white p-8">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-bold" style={{ color: GOLD }}>{slug}</h1>
-        <Link
-          href="/collections"
-          className="px-4 py-2 rounded-full border hover:bg-[#d4af37]/10"
-          style={{ borderColor: GOLD, color: GOLD }}
-        >
+        <Link href="/collections" className="px-4 py-2 rounded-full border hover:bg-[#d4af37]/10" style={{ borderColor: GOLD, color: GOLD }}>
           ← Back
         </Link>
       </div>
 
-      <DataGrid
-        title={`${slug} (first 50)`}
-        data={rows}
-        columnKeys={columnKeys}
-        slug={slug}
-      />
+      <DataGrid columns={columns} data={rows} title={`${slug} (first 50)`} />
     </main>
   );
 }

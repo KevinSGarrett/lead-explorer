@@ -2,7 +2,6 @@ import client from '@/lib/directus';
 import { readCollections } from '@directus/sdk';
 import Link from 'next/link';
 
-const GOLD = '#d4af37';
 const isCore = (name: string) => name.startsWith('directus_');
 
 export default async function CollectionsPage() {
@@ -13,21 +12,18 @@ export default async function CollectionsPage() {
     .sort();
 
   return (
-    <main className="min-h-screen bg-black text-white p-8">
-      <h1 className="text-3xl font-bold mb-6" style={{ color: GOLD }}>
-        Collections
-      </h1>
+    <main className="min-h-screen bg-background text-foreground p-8">
+      <h1 className="text-3xl font-bold text-gold mb-6">Collections</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {list.map((name) => (
           <Link
             key={name}
             href={`/collections/${encodeURIComponent(name)}`}
-            className="block p-5 rounded-2xl border transition-colors hover:bg-[#d4af37]/10"
-            style={{ borderColor: GOLD }}
+            className="card p-5 shadow-soft transition-colors hover:bg-gold/10"
           >
             <div className="text-lg font-semibold">{name}</div>
-            <div className="text-white/60 text-sm mt-1">Click to view rows</div>
+            <div className="text-foreground/60 text-sm mt-1">Click to view rows</div>
           </Link>
         ))}
       </div>

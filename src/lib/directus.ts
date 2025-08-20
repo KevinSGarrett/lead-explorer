@@ -1,8 +1,18 @@
-// src/lib/directus.ts
 import { createDirectus, rest, staticToken } from '@directus/sdk';
 
-const URL = process.env.NEXT_PUBLIC_DIRECTUS_URL || 'http://3.85.34.51:8055';
-const TOKEN = process.env.DIRECTUS_STATIC_TOKEN || 'W_QMhaWBsM3lFqsnYRLeZyCfnvaIWUzl';
+const DIRECTUS_URL =
+  process.env.NEXT_PUBLIC_DIRECTUS_URL ||
+  process.env.DIRECTUS_URL ||
+  'http://3.85.34.51:8055';
 
-const client = createDirectus(URL).with(rest()).with(staticToken(TOKEN));
+const DIRECTUS_TOKEN =
+  process.env.DIRECTUS_STATIC_TOKEN ||
+  process.env.DIRECTUS_TOKEN ||
+  '';
+
+const client = createDirectus(DIRECTUS_URL)
+  .with(rest())
+  .with(staticToken(DIRECTUS_TOKEN));
+
 export default client;
+

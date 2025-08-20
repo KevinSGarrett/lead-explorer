@@ -125,3 +125,41 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* === Lead Explorer additions (non-destructive) === */
+
+/* Global tokens */
+:root { --gold: #d4af37; }
+
+/* Pretty cards / outline buttons used across pages */
+.card {
+  @apply rounded-2xl border bg-background/80;
+  border-color: var(--gold);
+}
+.btn-outline {
+  @apply rounded-full border px-4 py-2 hover:bg-[color:rgba(212,175,55,0.10)];
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+/* Links that look action-y */
+.link-gold {
+  color: var(--gold);
+}
+.link-gold:hover {
+  text-decoration: underline;
+}
+
+/* DataGrid: dark table chrome that works with shadcn <Table> */
+.table-dark thead th {
+  @apply bg-background text-foreground;
+}
+.table-dark tbody td {
+  @apply bg-background text-foreground;
+}
+.table-dark tr:hover td {
+  @apply bg-background/60;
+}
+
+/* Small helpers (you already had text-gold/bg-gold/border-gold) */
+.shadow-soft { box-shadow: 0 10px 30px rgba(212,175,55,0.12); }
