@@ -1,0 +1,59 @@
+name: AI Build
+
+on:
+  # Manual trigger via CLI or GitHub UI
+  workflow_dispatch:
+
+  # Auto-trigger when design-sync updates design-refresh
+  push:
+    branches:
+      - design-refresh
+    paths:
+      - "design/**"
+      - "src/styles/**"
+      - ".github/workflows/ai-build.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  ai_build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps (pnpm or npm)
+        run: |
+          if [ -f package.json ]; then
+            corepack enable || true
+            if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then
+              pnpm install --frozen-lockfile
+            else
+              npm ci
+            fi
+          fi
+
+      - name: Build app
+        run: npm run build
+
+      - name: Export static (if Next.js)
+        run: |
+          if grep -q "next" package.json; then
+            npm run export || echo "No export step defined"
+          fi
+
+      - name: Commit AI build artifacts
+        run: |
+          git config user.name "automation-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git checkout -B ai-build
+          git add -A
+          git commit -m "chore(ai): build from design-refresh" || echo "No changes to commit"
+          git push -f origin ai-build
+

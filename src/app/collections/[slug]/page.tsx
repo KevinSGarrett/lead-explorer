@@ -1,57 +1,80 @@
-import client from '@/lib/directus';
-import { readItems } from '@directus/sdk';
-import DataGrid from '@/components/ui/DataGrid';
-import Link from 'next/link';
+import * as React from "react";
+import Link from "next/link";
+import DataGrid, { ColumnDef } from "@/components/ui/DataGrid";
 
-type ParamsP = Promise<{ slug: string }>;
-const GOLD = '#d4af37';
+type DirectusListResponse<T> = { data: T[] };
+type Row = Record<string, unknown>;
+type RouteParams = { slug: string };
 
-export default async function CollectionDetail({ params }: { params: ParamsP }) {
+const DIRECTUS_URL =
+  process.env.NEXT_PUBLIC_DIRECTUS_URL ??
+  process.env.DIRECTUS_URL ??
+  "http://localhost:8055";
+
+async function fetchRows(slug: string): Promise<Row[]> {
+  const url = new URL(`${DIRECTUS_URL}/items/${encodeURIComponent(slug)}`);
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to load rows for ${slug} (${res.status})`);
+  const json = (await res.json()) as DirectusListResponse<Row>;
+  return json.data;
+}
+
+function buildColumns(rows: Row[]): Array<ColumnDef<Row>> {
+  const cols = new Set<string>();
+  for (const r of rows) {
+    Object.keys(r).forEach((k) => cols.add(k));
+    if (cols.size >= 12) break;
+  }
+  return Array.from(cols).map((key) => ({
+    key,
+    header: key,
+    render:
+      key === "id"
+        ? (value: unknown) =>
+            typeof value === "string" || typeof value === "number" ? (
+              <Link href={`./${value}`} className="underline underline-offset-2">
+                {String(value)}
+              </Link>
+            ) : (
+              String(value ?? "—")
+            )
+        : undefined,
+  }));
+}
+
+export default async function CollectionRowsPage({
+  params,
+}: {
+  params: Promise<RouteParams>;
+}) {
   const { slug } = await params;
 
-  let rows: any[] = [];
-  try {
-    rows = await client.request(readItems(slug, { limit: 50 }));
-  } catch (e: any) {
-    return (
-      <main className="min-h-screen bg-black text-white p-8">
-        <h1 className="text-3xl font-bold mb-6" style={{ color: GOLD }}>{slug}</h1>
-        <div className="rounded-xl border p-4" style={{ borderColor: GOLD }}>
-          <div className="text-red-400 font-semibold mb-2">Could not read items.</div>
-          <pre className="text-xs opacity-70 whitespace-pre-wrap">{String(e)}</pre>
-        </div>
-        <div className="mt-4">
-          <Link href="/collections" className="underline" style={{ color: GOLD }}>
-            ← Back
-          </Link>
-        </div>
-      </main>
-    );
-  }
-
-  // ⬇️ Only pass SERIALIZABLE data to the client grid
-  const sample = rows[0] ?? {};
-  const columnKeys = Object.keys(sample).slice(0, 12);
+  const rows = await fetchRows(slug);
+  const columns = buildColumns(rows);
 
   return (
-    <main className="min-h-screen bg-black text-white p-8">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold" style={{ color: GOLD }}>{slug}</h1>
-        <Link
-          href="/collections"
-          className="px-4 py-2 rounded-full border hover:bg-[#d4af37]/10"
-          style={{ borderColor: GOLD, color: GOLD }}
-        >
-          ← Back
+    <main className="p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">{slug}</h1>
+        <Link href="/collections" className="text-sm underline underline-offset-2">
+          All collections
         </Link>
       </div>
 
-      <DataGrid
-        title={`${slug} (first 50)`}
-        data={rows}
-        columnKeys={columnKeys}
-        slug={slug}
+      <DataGrid<Row>
+        rows={rows}
+        columns={columns}
+        getRowKey={(row: Row, i: number) => {
+          const key = (row.id ??
+            (row as Record<string, unknown>)._id ??
+            (row as Record<string, unknown>).primary ??
+            i) as unknown;
+          return typeof key === "string" || typeof key === "number" ? String(key) : String(i);
+        }}
+        emptyMessage="No records found."
+        className="mt-2"
       />
     </main>
   );
 }
+
