@@ -12,34 +12,249 @@ on:
   push:
     branches: [ chore/ci-automation ]
     paths:
+      - "design/**"
+      - "scripts/**"
       - ".github/workflows/design-sync-v3.yml"
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
-# Use stable key even if github.ref is empty on repo_dispatch
 concurrency:
-  group: design-sync-v3-${{ github.sha }}
+  group: design-sync-v3-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
-  smoke:
+  design_sync:
     runs-on: ubuntu-latest
-    steps:
-      - name: Always start
-        if: ${{ always() }}
-        run: |
-          echo "🟢 v3 smoke started"
-          echo "event=${GITHUB_EVENT_NAME}"
-          echo "ref=${GITHUB_REF}"
-          echo "ref_name=${GITHUB_REF_NAME}"
-          echo "sha=${GITHUB_SHA}"
-          echo "inputs.ref=${{ github.event.inputs.ref }}"
-          echo "payload.ref=${{ github.event.client_payload.ref }}"
+    env:
+      INPUT_REF: ${{ github.event.inputs.ref }}
+      PAYLOAD_REF: ${{ github.event.client_payload.ref }}
 
-      - name: Checkout (optional)
+      FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+      FIGMA_FILE_KEY: ${{ vars.FIGMA_FILE_KEY || secrets.FIGMA_FILE_KEY }}
+
+      LOCOFY_EMAIL: ${{ secrets.LOCOFY_EMAIL }}
+      LOCOFY_PASSWORD: ${{ secrets.LOCOFY_PASSWORD }}
+
+      TELEPORTHQ_TOKEN: ${{ secrets.TELEPORTHQ_TOKEN }}
+      ENABLE_TELEPORTHQ: ${{ vars.ENABLE_TELEPORTHQ || 'false' }}
+
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+
+      ENABLE_CREWAI: ${{ vars.ENABLE_CREWAI || 'false' }}
+      CREWAI_CONFIG: ${{ vars.CREWAI_CONFIG || 'scripts/crewai/design.yml' }}
+
+      GH_TOKEN: ${{ secrets.PR_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Resolve ref to checkout
+        id: refsel
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${INPUT_REF:-}"
+          if [ -z "$REF" ]; then REF="${PAYLOAD_REF:-}"; fi
+          if [ -z "$REF" ]; then REF="${GITHUB_REF_NAME:-}"; fi
+          if [ -z "$REF" ]; then REF="main"; fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Using ref: $REF"
+
+      - name: Checkout target ref
         uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.refsel.outputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps (pnpm or npm)
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable || true
+          if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Debug inputs / PNGs
+        shell: bash
+        run: |
+          echo "event=${GITHUB_EVENT_NAME}"
+          echo "resolved ref=${{ steps.refsel.outputs.ref }}"
+          echo "sha=${GITHUB_SHA}"
+          echo "FIGMA_TOKEN set? $([ -n "${FIGMA_TOKEN:-}" ] && echo yes || echo no)"
+          echo "OPENAI_API_KEY set? $([ -n "${OPENAI_API_KEY:-}" ] && echo yes || echo no)"
+          echo "ANTHROPIC_API_KEY set? $([ -n "${ANTHROPIC_API_KEY:-}" ] && echo yes || echo no)"
+          echo "List design PNGs:"; (ls -1 design/uizard/*.png 2>/dev/null || echo "(none)")
+
+      - name: Generate design tokens (Figma or AI)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${FIGMA_TOKEN:-}" ] && [ -n "${FIGMA_FILE_KEY:-}" ]; then
+            echo "🔷 Using Figma variables"
+            [ -f scripts/figma/pull-variables.js ] && node scripts/figma/pull-variables.js || true
+            [ -f scripts/figma/update-theme.js ] && node scripts/figma/update-theme.js || true
+          else
+            echo "✨ Using AI fallback tokens"
+            [ -f scripts/ai/generate-tokens.js ] && node scripts/ai/generate-tokens.js || echo "No AI token generator present, skipping"
+          fi
+
+      - name: Locofy export (optional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${LOCOFY_EMAIL:-}" ] && [ -n "${LOCOFY_PASSWORD:-}" ] && [ -f scripts/locofy/export.sh ]; then
+            bash scripts/locofy/export.sh
+          else
+            echo "Skipping Locofy (no creds or script)."
+          fi
+
+      - name: TeleportHQ export (optional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${ENABLE_TELEPORTHQ:-false}" = "true" ] && [ -n "${TELEPORTHQ_TOKEN:-}" ] && [ -f scripts/teleporthq/export.sh ]; then
+            bash scripts/teleporthq/export.sh
+          else
+            echo "Skipping TeleportHQ (disabled, missing token, or no script)."
+          fi
+
+      - name: Uizard image → code (OpenAI/Claude)
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
+          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
+          ANTHROPIC_MODEL: ${{ env.ANTHROPIC_MODEL }}
+        run: |
+          set -euo pipefail
+          if [ ! -d design/uizard ]; then
+            echo "No design/uizard folder; skipping generation."
+            exit 0
+          fi
+          shopt -s nullglob
+          GEN_COUNT=0
+          for PNG in design/uizard/*.png; do
+            echo "Generating from: $PNG"
+            if [ -f scripts/ai/image-to-code.mjs ]; then
+              node scripts/ai/image-to-code.mjs "$PNG"
+              GEN_COUNT=$((GEN_COUNT+1))
+            else
+              echo "Missing scripts/ai/image-to-code.mjs; skipping."
+              break
+            fi
+          done
+          echo "Generated from $GEN_COUNT PNG(s)."
+
+      - name: Post-process: auto-clientize hook-using files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f scripts/ai/postprocess-clientize.mjs ]; then
+            node scripts/ai/postprocess-clientize.mjs "generated/uizard"
+          else
+            echo "No auto-clientize script present; skipping."
+          fi
+
+      - name: CrewAI design agents (optional)
+        if: ${{ env.ENABLE_CREWAI == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "${CREWAI_CONFIG}" ]; then
+            echo "🚀 Running CrewAI with ${CREWAI_CONFIG}"
+            if [ -f scripts/crewai/run.mjs ]; then
+              node scripts/crewai/run.mjs "${CREWAI_CONFIG}"
+            elif [ -f scripts/crewai/run.js ]; then
+              node scripts/crewai/run.js "${CREWAI_CONFIG}"
+            else
+              echo "No CrewAI runner script found; skipping."
+            fi
+          else
+            echo "CREWAI_CONFIG not found; skipping."
+          fi
+
+      - name: Auto-wire preview routes under /uizard/*
+        shell: bash
+        run: |
+          set -euo pipefail
+          TSX_DIR="generated/uizard"
+          APP_DIR="src/app/uizard"
+          mkdir -p "$APP_DIR"
+          if [ -d "$TSX_DIR" ]; then
+            for f in "$TSX_DIR"/*.tsx; do
+              [ -e "$f" ] || continue
+              base="$(basename "$f" .tsx)"
+              route="$APP_DIR/$base/page.tsx"
+              if [ ! -f "$route" ]; then
+                mkdir -p "$(dirname "$route")"
+                cat > "$route" <<ROUTE
+import Component from '@/../generated/uizard/${base}';
+
+export default function Page() {
+  return <Component />;
+}
+ROUTE
+                echo "Created route: $route"
+              else
+                echo "Route exists: $route"
+              fi
+            done
+          else
+            echo "No $TSX_DIR directory; skipping route wiring."
+          fi
+
+      - name: Create/Update branch 'design-refresh' with changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "automation-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit on design-refresh."
+          else
+            git fetch origin +refs/heads/design-refresh:refs/remotes/origin/design-refresh || true
+            git checkout -B design-refresh
+            git commit -m "chore(design-sync): tokens/code/routes update"
+            git push -f origin design-refresh
+          fi
+
+      - name: Open or update PR to main (idempotent)
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PR_URL=$(gh pr list --head design-refresh --base main --json url --jq '.[0].url' || true)
+          if [ -z "$PR_URL" ]; then
+            PR_URL=$(gh pr create --base main --head design-refresh \
+              --title "chore(design-sync): import generated design assets" \
+              --body "Automated Uizard → React/Tailwind; tokens + routes wired. CI will run via ai-build and auto-merge on green." \
+              --label "auto" --label "design-sync")
+          else
+            gh pr edit "$PR_URL" --add-label "auto" --add-label "design-sync" || true
+          fi
+          gh pr merge "$PR_URL" --auto --squash || true
+
+      - name: Trigger AI Build workflow (repo_dispatch)
+        if: always()
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ env.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          event-type: ai-build
+          client-payload: |
+            {"ref":"design-refresh"}
 
       - name: Done
-        run: echo "🏁 v3 smoke finished"
-
+        run: echo "✅ design-sync-v3 pipeline completed"
