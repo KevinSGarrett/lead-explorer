@@ -1,3 +1,89 @@
-# NOW PASTE THE YAML STARTING WITH: name: Design Code Sync v3
-# (no leading > characters at all)
-# …paste the whole file…
+name: Design Code Sync v3
+run-name: "design-sync-v3 • ${{ github.event_name }} • ref=${{ inputs.ref || github.event.client_payload.ref || github.ref_name || 'n/a' }} • sha=${{ github.sha }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref/branch to sync (defaults to current)"
+        required: false
+  repository_dispatch:
+    types: [design-sync]
+  push:
+    branches: [ chore/ci-automation ]
+    paths:
+      - "design/**"
+      - "scripts/**"
+      - ".github/workflows/design-sync-v3.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: design-sync-v3-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  design_sync:
+    runs-on: ubuntu-latest
+    env:
+      INPUT_REF: ${{ github.event.inputs.ref }}
+      PAYLOAD_REF: ${{ github.event.client_payload.ref }}
+
+      FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+      FIGMA_FILE_KEY: ${{ vars.FIGMA_FILE_KEY || secrets.FIGMA_FILE_KEY }}
+
+      LOCOFY_EMAIL: ${{ secrets.LOCOFY_EMAIL }}
+      LOCOFY_PASSWORD: ${{ secrets.LOCOFY_PASSWORD }}
+
+      TELEPORTHQ_TOKEN: ${{ secrets.TELEPORTHQ_TOKEN }}
+      ENABLE_TELEPORTHQ: ${{ vars.ENABLE_TELEPORTHQ || 'false' }}
+
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+
+      ENABLE_CREWAI: ${{ vars.ENABLE_CREWAI || 'false' }}
+      CREWAI_CONFIG: ${{ vars.CREWAI_CONFIG || 'scripts/crewai/design.yml' }}
+
+      GH_TOKEN: ${{ secrets.PR_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Resolve ref to checkout
+        id: refsel
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${INPUT_REF:-}"
+          if [ -z "$REF" ]; then REF="${PAYLOAD_REF:-}"; fi
+          if [ -z "$REF" ]; then REF="${GITHUB_REF_NAME:-}"; fi
+          if [ -z "$REF" ]; then REF="main"; fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Using ref: $REF"
+
+      - name: Checkout target ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.refsel.outputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Debug inputs / PNGs
+        shell: bash
+        run: |
+          echo "event=${GITHUB_EVENT_NAME}"
+          echo "resolved ref=${{ steps.refsel.outputs.ref }}"
+          echo "sha=${GITHUB_SHA}"
+          echo "FIGMA_TOKEN set? $([ -n "${FIGMA_TOKEN:-}" ] && echo yes || echo no)"
+          echo "OPENAI_API_KEY set? $([ -n "${OPENAI_API_KEY:-}" ] && echo yes || echo no)"
+          echo "ANTHROPIC_API_KEY set? $([ -n "${ANTHROPIC_API_KEY:-}" ] && echo yes || echo no)"
+          echo "List design PNGs:"; (ls -1 design/uizard/*.png 2>/dev/null || echo "(none)")
+
+      - name: Done
+        run: echo "✅ design-sync-v3 pipeline scaffold OK"
