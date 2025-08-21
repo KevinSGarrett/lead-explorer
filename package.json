@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "autobuild": "node scripts/auto-build.mjs"
+    "autobuild": "node scripts/auto-build.mjs",
+    "type-check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.60.0",
@@ -17,14 +18,12 @@
     "@radix-ui/react-slot": "^1.2.3",
     "@tanstack/react-table": "^8.21.3",
     "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
     "dotenv": "^17.2.1",
     "lucide-react": "^0.540.0",
     "next": "15.4.7",
     "openai": "^5.12.2",
     "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "tailwind-merge": "^3.3.1"
+    "react-dom": "19.1.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -32,8 +31,10 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "clsx": "^2.1.1",
     "eslint": "^9",
     "eslint-config-next": "15.4.7",
+    "tailwind-merge": "^3.3.1",
     "tailwindcss": "^4",
     "tw-animate-css": "^1.3.7",
     "typescript": "^5"

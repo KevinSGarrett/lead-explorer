@@ -1,51 +1,82 @@
-import client from '@/lib/directus';
-import { readItem } from '@directus/sdk';
-import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import * as React from "react";
+import Link from "next/link";
 
-type ParamsP = Promise<{ slug: string; id: string }>;
-const GOLD = '#d4af37';
+type Row = Record<string, unknown>;
+type DirectusItemResponse<T> = { data: T };
+type RouteParams = { slug: string; id: string };
 
-export default async function RecordDetail({ params }: { params: ParamsP }) {
+const DIRECTUS_URL =
+  process.env.NEXT_PUBLIC_DIRECTUS_URL ??
+  process.env.DIRECTUS_URL ??
+  "http://localhost:8055";
+
+async function fetchItem(slug: string, id: string): Promise<Row> {
+  const url = `${DIRECTUS_URL}/items/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to load ${slug}/${id} (${res.status})`);
+  const json = (await res.json()) as DirectusItemResponse<Row>;
+  return json.data;
+}
+
+export default async function ItemDetailPage({
+  params,
+}: {
+  params: Promise<RouteParams>;
+}) {
   const { slug, id } = await params;
 
-  if (!slug || !id) return notFound();
-
-  let data: any = null;
-  try {
-    data = await client.request(readItem(slug, id));
-  } catch {
-    // If Directus says the item/collection doesn't exist, show 404
-    return notFound();
-  }
+  const item = await fetchItem(slug, id);
 
   return (
-    <main className="min-h-screen bg-background text-foreground p-8">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold text-gold">{slug} / {id}</h1>
-        <Link
-          href={`/collections/${encodeURIComponent(slug)}`}
-          className="px-4 py-2 rounded-full border hover:bg-gold/10"
-          style={{ borderColor: GOLD, color: GOLD }}
-        >
-          ← Back to {slug}
-        </Link>
+    <main className="p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">
+          {slug} / <span className="text-muted-foreground">{id}</span>
+        </h1>
+        <div className="flex gap-3 text-sm">
+          <Link href={`/collections/${encodeURIComponent(slug)}`} className="underline underline-offset-2">
+            Back to list
+          </Link>
+          <Link href="/collections" className="underline underline-offset-2">
+            All collections
+          </Link>
+        </div>
       </div>
 
-      {!data ? (
-        <div className="text-white/70">No data found.</div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {Object.entries(data).map(([key, value]) => (
-            <div key={key} className="rounded-2xl border p-4 bg-black" style={{ borderColor: GOLD }}>
-              <div className="text-sm uppercase tracking-wide text-white/60">{key}</div>
-              <div className="mt-1 text-base whitespace-pre-wrap break-words">
-                {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '')}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {Object.entries(item).map(([key, value]) => (
+          <div key={key} className="border rounded-lg p-4">
+            <div className="text-xs uppercase tracking-wide text-muted-foreground">{key}</div>
+            <div className="mt-1 text-sm break-words">{renderValue(value)}</div>
+          </div>
+        ))}
+      </section>
     </main>
   );
 }
+
+function renderValue(v: unknown): React.ReactNode {
+  if (v == null) return <span className="text-muted-foreground">—</span>;
+  if (Array.isArray(v)) return <span>{v.map((x) => stringifySafe(x)).join(", ")}</span>;
+  if (typeof v === "object") {
+    try {
+      return <code className="text-xs">{JSON.stringify(v, null, 2)}</code>;
+    } catch {
+      return <span className="text-muted-foreground">[object]</span>;
+    }
+  }
+  return <span>{String(v)}</span>;
+}
+
+function stringifySafe(v: unknown): string {
+  if (v == null) return "—";
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return "[object]";
+    }
+  }
+  return String(v);
+}
+
