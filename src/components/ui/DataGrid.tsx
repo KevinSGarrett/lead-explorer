@@ -1,165 +1,123 @@
-'use client';
+"use client";
 
-import * as React from 'react';
-import Link from 'next/link';
-import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getSortedRowModel,
-  getPaginationRowModel,
-  useReactTable,
-} from '@tanstack/react-table';
+import * as React from "react";
 
-import { Input } from './input';
-import { Button } from './button';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './table';
+export type KeyOf<T extends Record<string, unknown>> = Extract<keyof T, string>;
 
-const GOLD = '#d4af37';
-
-type Props<TData extends Record<string, any>> = {
-  title?: string;
-  /** raw rows from Directus */
-  data: TData[];
-  /** which keys to show as columns (strings only) */
-  columnKeys: string[];
-  /** collection slug so we can render the “Open” link */
-  slug: string;
+export type ColumnDef<T extends Record<string, unknown>> = {
+  /** Key in row to display (string because rows may be Record<string, unknown>) */
+  key: KeyOf<T> | string;
+  /** Column header label */
+  header: string;
+  /** Optional custom cell renderer */
+  render?: (value: unknown, row: T) => React.ReactNode;
 };
 
-export default function DataGrid<TData extends Record<string, any>>({
-  title,
-  data,
-  columnKeys,
-  slug,
-}: Props<TData>) {
-  const [sorting, setSorting] = React.useState<any>([]);
-  const [globalFilter, setGlobalFilter] = React.useState('');
+export type DataGridProps<T extends Record<string, unknown>> = {
+  /** Rows to render */
+  rows: T[];
+  /** Optional explicit columns. If omitted, columns are inferred from the first row's keys */
+  columns?: Array<ColumnDef<T>>;
+  /** Optional row key extractor (defaults to index) */
+  getRowKey?: (row: T, index: number) => string;
+  /** Optional empty-state message */
+  emptyMessage?: string;
+  /** Optional className for outer wrapper */
+  className?: string;
+};
 
-  // Build the column defs **on the client** (allowed to contain functions)
-  const columns = React.useMemo<ColumnDef<TData, any>[]>(() => {
-    const fieldCols: ColumnDef<TData, any>[] = columnKeys.map((key) => ({
-      header: key,
-      accessorKey: key,
-      cell: ({ getValue }) => {
-        const v = getValue();
-        return typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
-      },
-    }));
+function inferColumns<T extends Record<string, unknown>>(rows: T[]): Array<ColumnDef<T>> {
+  const first = rows[0];
+  if (!first) return [];
+  const keys = Object.keys(first) as Array<KeyOf<T>>;
+  return keys.map((k) => ({ key: k, header: String(k) }));
+}
 
-    return [
-      {
-        header: 'View',
-        cell: ({ row }) => (
-          <Link
-            href={`/collections/${encodeURIComponent(slug)}/${encodeURIComponent(row.original?.id ?? '')}`}
-            className="underline"
-            style={{ color: GOLD }}
-          >
-            Open
-          </Link>
-        ),
-      },
-      ...fieldCols,
-    ];
-  }, [columnKeys, slug]);
+export function DataGrid<T extends Record<string, unknown>>(props: DataGridProps<T>) {
+  const {
+    rows,
+    columns: explicitColumns,
+    getRowKey,
+    emptyMessage = "No data",
+    className,
+  } = props;
 
-  const table = useReactTable({
-    data,
-    columns,
-    state: { sorting, globalFilter },
-    onSortingChange: setSorting,
-    onGlobalFilterChange: setGlobalFilter,
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
+  const columns = React.useMemo(
+    () => explicitColumns ?? inferColumns(rows),
+    [explicitColumns, rows]
+  );
+
+  if (!rows.length) {
+    return (
+      <div className={className}>
+        <div className="text-sm text-muted-foreground border rounded-md p-6">{emptyMessage}</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold" style={{ color: GOLD }}>
-          {title ?? 'Data'}
-        </h2>
-        <Input
-          placeholder="Search…"
-          value={globalFilter ?? ''}
-          onChange={(e) => setGlobalFilter(e.target.value)}
-          className="max-w-xs bg-black/40 border"
-          style={{ borderColor: GOLD, color: 'white' }}
-        />
-      </div>
-
-      <div className="rounded-2xl border overflow-x-auto" style={{ borderColor: GOLD }}>
-        <Table className="[&_th]:bg-background [&_td]:bg-background">
-          <TableHeader>
-            {table.getHeaderGroups().map((hg) => (
-              <TableRow key={hg.id}>
-                {hg.headers.map((header) => (
-                  <TableHead key={header.id} className="text-white">
-                    {header.isPlaceholder ? null : (
-                      <button
-                        className="hover:underline"
-                        onClick={header.column.getToggleSortingHandler()}
-                      >
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                        {{
-                          asc: ' ▲',
-                          desc: ' ▼',
-                        }[header.column.getIsSorted() as string] ?? null}
-                      </button>
-                    )}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {table.getRowModel().rows.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id} className="text-white/90">
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={table.getAllColumns().length} className="text-center text-white/60">
-                  No results.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      <div className="flex items-center justify-end gap-2">
-        <Button
-          variant="outline"
-          onClick={() => table.previousPage()}
-          disabled={!table.getCanPreviousPage()}
-          style={{ borderColor: GOLD, color: GOLD, background: 'transparent' }}
-        >
-          Prev
-        </Button>
-        <div className="text-white/70 text-sm">
-          Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount() || 1}
-        </div>
-        <Button
-          variant="outline"
-          onClick={() => table.nextPage()}
-          disabled={!table.getCanNextPage()}
-          style={{ borderColor: GOLD, color: GOLD, background: 'transparent' }}
-        >
-          Next
-        </Button>
+    <div className={className}>
+      <div className="w-full overflow-x-auto rounded-lg border">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40">
+            <tr>
+              {columns.map((col) => (
+                <th key={String(col.key)} className="text-left font-medium px-3 py-2 whitespace-nowrap">
+                  {col.header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, idx) => {
+              const rowKey = getRowKey ? getRowKey(row, idx) : String(idx);
+              return (
+                <tr key={rowKey} className="border-t hover:bg-muted/20">
+                  {columns.map((col) => {
+                    const value: unknown =
+                      typeof col.key === "string" ? (row as Record<string, unknown>)[col.key] : row[col.key];
+                    return (
+                      <td key={String(col.key)} className="px-3 py-2 align-top">
+                        {col.render ? col.render(value, row) : renderCell(value)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );
 }
+
+function renderCell(value: unknown): React.ReactNode {
+  if (value == null) return <span className="text-muted-foreground">—</span>;
+  if (Array.isArray(value)) {
+    return <span>{value.map((v) => stringifySafe(v)).join(", ")}</span>;
+  }
+  if (typeof value === "object") {
+    try {
+      return <code className="text-xs">{JSON.stringify(value)}</code>;
+    } catch {
+      return <span className="text-muted-foreground">[object]</span>;
+    }
+  }
+  return <span>{String(value)}</span>;
+}
+
+function stringifySafe(v: unknown): string {
+  if (v == null) return "—";
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return "[object]";
+    }
+  }
+  return String(v);
+}
+
+export default DataGrid;
 
