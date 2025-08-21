@@ -74,6 +74,16 @@ jobs:
             echo "Skipping TeleportHQ: disabled or token missing."
           fi
 
+      - name: Uizard image → code (OpenAI/Claude)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+        run: |
+          node scripts/ai/image-to-code.mjs
+
+
       - name: Commit changes to design-refresh
         run: |
           git config user.name "automation-bot"
