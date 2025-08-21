@@ -47,11 +47,15 @@ jobs:
       ENABLE_CREWAI: ${{ vars.ENABLE_CREWAI || 'false' }}
       CREWAI_CONFIG: ${{ vars.CREWAI_CONFIG || 'scripts/crewai/design.yml' }}
 
-      # resolve the requested ref for checkout
       INPUT_REF: ${{ github.event.inputs.ref }}
       PAYLOAD_REF: ${{ github.event.client_payload.ref }}
 
     steps:
+      # ---- NEW: guarantees job materializes so we always get logs ----
+      - name: Always start
+        if: ${{ always() }}
+        run: echo "🟢 design-sync-v3 starting"
+
       - name: Resolve ref to checkout
         id: refsel
         run: |
@@ -76,6 +80,7 @@ jobs:
         run: |
           echo "ref (resolved): ${{ steps.refsel.outputs.ref }}"
           echo "sha: $GITHUB_SHA"
+          echo "event: $GITHUB_EVENT_NAME"
           echo "list PNGs under design/:"
           (ls -1 design/*.png 2>/dev/null || true)
           echo "list PNGs under design/uizard/:"
@@ -229,13 +234,8 @@ PY
           fi
           gh pr merge "${PR_NUMBER}" --auto --squash || true
 
-  trigger_ai_build:
-    needs: design_sync
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger AI Build Workflow
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: ai-build
+      # ---- NEW: ensures we always get a final log line even on odd skip cases ----
+      - name: Always finish
+        if: ${{ always() }}
+        run: echo "🏁 design-sync-v3 finished"
 
