@@ -1,0 +1,230 @@
+name: Design Code Sync v3
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - chore/ci-automation
+    paths:
+      - "design/**"
+      - "scripts/figma/**"
+      - "scripts/ai/**"
+      - "scripts/locofy/**"
+      - "scripts/teleporthq/**"
+      - "scripts/crewai/**"
+      - ".github/workflows/design-sync-v3.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: design-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  design_sync:
+    runs-on: ubuntu-latest
+    env:
+      FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+      FIGMA_FILE_KEY: ${{ vars.FIGMA_FILE_KEY || secrets.FIGMA_FILE_KEY }}
+      ENABLE_TELEPORTHQ: ${{ vars.ENABLE_TELEPORTHQ || 'false' }}
+      LOCOFY_EMAIL: ${{ secrets.LOCOFY_EMAIL }}
+      LOCOFY_PASSWORD: ${{ secrets.LOCOFY_PASSWORD }}
+      TELEPORTHQ_TOKEN: ${{ secrets.TELEPORTHQ_TOKEN }}
+
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+
+      ENABLE_CREWAI: ${{ vars.ENABLE_CREWAI || 'false' }}
+      CREWAI_CONFIG: ${{ vars.CREWAI_CONFIG || 'scripts/crewai/design.yml' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Debug context
+        run: |
+          echo "ref: $GITHUB_REF"
+          echo "ref_name: $GITHUB_REF_NAME"
+          echo "sha: $GITHUB_SHA"
+          echo "list PNGs under design/:"
+          (ls -1 design/*.png 2>/dev/null || true)
+          echo "list PNGs under design/uizard/:"
+          (ls -1 design/uizard/*.png 2>/dev/null || true)
+
+      - name: Install deps (pnpm or npm)
+        run: |
+          if [ -f package.json ]; then
+            corepack enable || true
+            if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then
+              pnpm install --frozen-lockfile
+            else
+              npm ci
+            fi
+          else
+            echo "No package.json found — skipping install."
+          fi
+
+      - name: Generate design tokens (Figma or AI) — graceful
+        run: |
+          set -e
+          if [ -n "${FIGMA_TOKEN}" ] && [ -n "${FIGMA_FILE_KEY}" ] && [ -f scripts/figma/pull-variables.js ] && [ -f scripts/figma/update-theme.js ]; then
+            echo "Using Figma…"
+            node scripts/figma/pull-variables.js
+            node scripts/figma/update-theme.js
+          elif [ -f scripts/ai/generate-tokens.js ]; then
+            echo "Using AI fallback…"
+            node scripts/ai/generate-tokens.js
+          else
+            echo "No token generator scripts found — skipping."
+          fi
+
+      - name: Locofy export (optional)
+        run: |
+          if [ -n "${LOCOFY_EMAIL}" ] && [ -n "${LOCOFY_PASSWORD}" ] && [ -f scripts/locofy/export.sh ]; then
+            bash scripts/locofy/export.sh
+          else
+            echo "Skipping Locofy: creds or script not set."
+          fi
+
+      - name: TeleportHQ export (optional)
+        run: |
+          if [ "${ENABLE_TELEPORTHQ}" = "true" ] && [ -n "${TELEPORTHQ_TOKEN}" ] && [ -f scripts/teleporthq/export.sh ]; then
+            bash scripts/teleporthq/export.sh
+          else
+            echo "Skipping TeleportHQ: disabled, token missing, or script missing."
+          fi
+
+      - name: Uizard image → code (OpenAI/Claude) — graceful
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          if [ ! -f scripts/ai/image-to-code.mjs ]; then
+            echo "Generator scripts/ai/image-to-code.mjs not found — skipping."
+            exit 0
+          fi
+
+          mapfile -t PNGS < <(find design -maxdepth 2 -type f -name '*.png' 2>/dev/null || true)
+          if [ "${#PNGS[@]}" -eq 0 ]; then
+            echo "No Uizard PNGs found under design/ — skipping generator."
+            exit 0
+          fi
+
+          echo "Found ${#PNGS[@]} PNG(s). Running generator for each…"
+          ok=0; fail=0
+          for f in "${PNGS[@]}"; do
+            echo "→ Generating for: $f"
+            if node scripts/ai/image-to-code.mjs "$f"; then
+              ok=$((ok+1))
+            else
+              echo "::warning::Generator failed for $f (continuing)"
+              fail=$((fail+1))
+            fi
+          done
+          echo "Generator summary: ok=$ok fail=$fail"
+
+      - name: Auto-clientize generated components (optional)
+        run: |
+          if [ -f scripts/ai/postprocess-clientize.mjs ]; then
+            node scripts/ai/postprocess-clientize.mjs
+          else
+            echo "Skipping clientization: scripts/ai/postprocess-clientize.mjs not found."
+          fi
+
+      - name: Setup Python (for CrewAI)
+        if: env.ENABLE_CREWAI == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install CrewAI + tools (optional)
+        if: env.ENABLE_CREWAI == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install "crewai>=0.40" "crewai-tools>=0.5" "openai>=1" "anthropic>=0.26" "PyGithub>=2.2"
+
+      - name: Run CrewAI pipeline (optional)
+        if: env.ENABLE_CREWAI == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PR_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          if [ -f scripts/crewai/run_pipeline.py ]; then
+            echo "Running scripts/crewai/run_pipeline.py…"
+            python scripts/crewai/run_pipeline.py --branch design-refresh --base main --mode design-sync
+          elif [ -f "${CREWAI_CONFIG}" ]; then
+            echo "Found ${CREWAI_CONFIG}. Add CrewAI CLI invocation here if using the CLI."
+            python - <<'PY'
+print("No scripts/crewai/run_pipeline.py found. Place your CrewAI CLI invocation here.")
+PY
+          else
+            echo "Skipping CrewAI: no scripts/crewai/run_pipeline.py or config present."
+          fi
+
+      - name: Commit changes to design-refresh
+        run: |
+          git config user.name "automation-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git fetch origin
+          git checkout -B design-refresh
+          git add -A
+          git commit -m "chore(design): sync tokens, generated UI, clientization, CrewAI outputs" || echo "No changes to commit"
+          git push -f origin design-refresh
+
+      - name: Open or update PR (idempotent, prefers PR_BOT_TOKEN)
+        env:
+          PR_BOT_TOKEN: ${{ secrets.PR_BOT_TOKEN }}
+          GH_DEFAULT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${PR_BOT_TOKEN:-}" ]; then
+            export GH_TOKEN="${PR_BOT_TOKEN}"
+            echo "Using PR_BOT_TOKEN for PR operations."
+          else
+            export GH_TOKEN="${GH_DEFAULT_TOKEN}"
+            echo "PR_BOT_TOKEN not set; using default GITHUB_TOKEN (may lack permissions)."
+          fi
+
+          PR_NUMBER="$(gh pr view design-refresh --base main --json number -q .number || true)"
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "No existing PR — creating…"
+            gh pr create \
+              --base main \
+              --head design-refresh \
+              --title "chore(design-sync): import generated UI & tokens (CrewAI=${ENABLE_CREWAI})" \
+              --body "Automated Uizard PNG → code, optional CrewAI orchestration, clientization, and token sync." \
+              --label "design-sync,auto-generated" \
+              --draft=false
+            PR_NUMBER="$(gh pr view design-refresh --base main --json number -q .number)"
+          else
+            echo "PR #${PR_NUMBER} already exists — updating labels/body…"
+            gh pr edit "${PR_NUMBER}" --add-label "design-sync"
+          fi
+
+          gh pr merge "${PR_NUMBER}" --auto --squash || true
+
+  trigger_ai_build:
+    needs: design_sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger AI Build Workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: ai-build
+
