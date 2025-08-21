@@ -13,8 +13,13 @@ on:
       - "src/styles/**"
       - ".github/workflows/ai-build.yml"
 
+  # Triggered explicitly by design-sync.yml
+  repository_dispatch:
+    types: [ai-build]
+
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   ai_build:
@@ -56,4 +61,20 @@ jobs:
           git add -A
           git commit -m "chore(ai): build from design-refresh" || echo "No changes to commit"
           git push -f origin ai-build
+
+      - name: Create/Update PR to main
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: automation/ai-build
+          base: main
+          title: Automation: AI build artifacts
+          commit-message: automation: AI build artifacts
+          body: |
+            This PR was created by the AI Build workflow.
+            - Generated layout for Business Detail.png
+            - Includes design tokens, scaffolds, and build artifacts
+          labels: |
+            automation
+            ai-build
+          delete-branch: true
 
