@@ -1,0 +1,17 @@
+name: Dispatch Smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show context
+        run: |
+          echo "ref: $GITHUB_REF"
+          echo "ref_name: $GITHUB_REF_NAME"
+          echo "sha: $GITHUB_SHA"
+      - name: Success
+        run: echo "✅ Smoke workflow ran"
+
