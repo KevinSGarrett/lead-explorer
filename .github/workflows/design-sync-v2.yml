@@ -54,6 +54,16 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: Debug context
+        run: |
+          echo "ref: $GITHUB_REF"
+          echo "ref_name: $GITHUB_REF_NAME"
+          echo "sha: $GITHUB_SHA"
+          echo "list PNGs under design/:"
+          (ls -1 design/*.png 2>/dev/null || true)
+          echo "list PNGs under design/uizard/:"
+          (ls -1 design/uizard/*.png 2>/dev/null || true)
+
       - name: Install deps (pnpm or npm)
         run: |
           if [ -f package.json ]; then
@@ -63,39 +73,72 @@ jobs:
             else
               npm ci
             fi
+          else
+            echo "No package.json found — skipping install."
           fi
 
-      - name: Generate design tokens (Figma or AI)
+      - name: Generate design tokens (Figma or AI) — graceful
         run: |
-          if [ -n "${FIGMA_TOKEN}" ] && [ -n "${FIGMA_FILE_KEY}" ]; then
+          set -e
+          if [ -n "${FIGMA_TOKEN}" ] && [ -n "${FIGMA_FILE_KEY}" ] && [ -f scripts/figma/pull-variables.js ] && [ -f scripts/figma/update-theme.js ]; then
             echo "Using Figma…"
             node scripts/figma/pull-variables.js
             node scripts/figma/update-theme.js
-          else
+          elif [ -f scripts/ai/generate-tokens.js ]; then
             echo "Using AI fallback…"
             node scripts/ai/generate-tokens.js
+          else
+            echo "No token generator scripts found — skipping."
           fi
 
       - name: Locofy export (optional)
         run: |
-          if [ -n "${LOCOFY_EMAIL}" ] && [ -n "${LOCOFY_PASSWORD}" ]; then
+          if [ -n "${LOCOFY_EMAIL}" ] && [ -n "${LOCOFY_PASSWORD}" ] && [ -f scripts/locofy/export.sh ]; then
             bash scripts/locofy/export.sh
           else
-            echo "Skipping Locofy: credentials not set."
+            echo "Skipping Locofy: creds or script not set."
           fi
 
       - name: TeleportHQ export (optional)
         run: |
-          if [ "${ENABLE_TELEPORTHQ}" = "true" ] && [ -n "${TELEPORTHQ_TOKEN}" ]; then
+          if [ "${ENABLE_TELEPORTHQ}" = "true" ] && [ -n "${TELEPORTHQ_TOKEN}" ] && [ -f scripts/teleporthq/export.sh ]; then
             bash scripts/teleporthq/export.sh
           else
-            echo "Skipping TeleportHQ: disabled or token missing."
+            echo "Skipping TeleportHQ: disabled, token missing, or script missing."
           fi
 
-      - name: Uizard image → code (OpenAI/Claude)
+      - name: Uizard image → code (OpenAI/Claude) — graceful
+        env:
+          # pass through keys if the generator needs them
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          # Update args if your generator expects a directory instead:
-          node scripts/ai/image-to-code.mjs "design/Business Detail.png"
+          set -e
+          if [ ! -f scripts/ai/image-to-code.mjs ]; then
+            echo "Generator scripts/ai/image-to-code.mjs not found — skipping."
+            exit 0
+          fi
+
+          # Collect png inputs from design/ and design/uizard/
+          mapfile -t PNGS < <(find design -maxdepth 2 -type f -name '*.png' 2>/dev/null || true)
+          if [ "${#PNGS[@]}" -eq 0 ]; then
+            echo "No Uizard PNGs found under design/ — skipping generator."
+            exit 0
+          fi
+
+          echo "Found ${#PNGS[@]} PNG(s). Running generator for each…"
+          ok=0; fail=0
+          for f in "${PNGS[@]}"; do
+            echo "→ Generating for: $f"
+            if node scripts/ai/image-to-code.mjs "$f"; then
+              ok=$((ok+1))
+            else
+              echo "::warning::Generator failed for $f (continuing)"
+              fail=$((fail+1))
+            fi
+          done
+          echo "Generator summary: ok=$ok fail=$fail"
+          # Do not fail the job even if some failed; CI can still open PR etc.
 
       - name: Auto-clientize generated components (optional)
         run: |
