@@ -178,13 +178,18 @@ ROUTE
         env: { GH_TOKEN: ${{ secrets.PR_BOT_TOKEN }} }
         run: gh api rate_limit >/dev/null && echo "PR_BOT_TOKEN OK"
 
-
       - name: Open or update PR to main (idempotent)
         env:
           GH_TOKEN: ${{ secrets.PR_BOT_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          # Ensure branch exists remotely; otherwise skip PR creation
+          if ! git ls-remote --exit-code --heads origin design-refresh >/dev/null 2>&1; then
+            echo "No design-refresh branch present; skipping PR."
+            exit 0
+          fi
+
           PR_URL=$(gh pr list --head design-refresh --base main --json url --jq '.[0].url' || true)
           if [ -z "$PR_URL" ]; then
             PR_URL=$(gh pr create --base main --head design-refresh \
@@ -207,6 +212,6 @@ ROUTE
           client-payload: |
             {"ref":"design-refresh"}
 
-
       - name: Done
         run: echo "✅ design-sync-v3 pipeline scaffold OK"
+
