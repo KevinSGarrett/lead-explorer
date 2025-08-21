@@ -1,4 +1,5 @@
 name: Design Code Sync v3
+run-name: "design-sync-v3 • ${{ github.event_name }} • ref=${{ inputs.ref || github.event.client_payload.ref || github.ref_name || 'n/a' }} • sha=${{ github.sha }}"
 
 on:
   workflow_dispatch:
@@ -24,8 +25,9 @@ permissions:
   contents: write
   pull-requests: write
 
+# NOTE: github.ref is often empty on repository_dispatch; use a stable fallback.
 concurrency:
-  group: design-sync-${{ github.ref }}
+  group: design-sync-${{ github.ref || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -47,14 +49,20 @@ jobs:
       ENABLE_CREWAI: ${{ vars.ENABLE_CREWAI || 'false' }}
       CREWAI_CONFIG: ${{ vars.CREWAI_CONFIG || 'scripts/crewai/design.yml' }}
 
+      # resolve the requested ref for checkout
       INPUT_REF: ${{ github.event.inputs.ref }}
       PAYLOAD_REF: ${{ github.event.client_payload.ref }}
 
     steps:
-      # ---- NEW: guarantees job materializes so we always get logs ----
+      # Force a job to always exist so we always have logs
       - name: Always start
         if: ${{ always() }}
-        run: echo "🟢 design-sync-v3 starting"
+        run: |
+          echo "🟢 Starting design-sync-v3"
+          echo "event=${GITHUB_EVENT_NAME}"
+          echo "ref_name=${GITHUB_REF_NAME}"
+          echo "ref=${GITHUB_REF}"
+          echo "sha=${GITHUB_SHA}"
 
       - name: Resolve ref to checkout
         id: refsel
@@ -81,9 +89,9 @@ jobs:
           echo "ref (resolved): ${{ steps.refsel.outputs.ref }}"
           echo "sha: $GITHUB_SHA"
           echo "event: $GITHUB_EVENT_NAME"
-          echo "list PNGs under design/:"
+          echo "PNG (design/):"
           (ls -1 design/*.png 2>/dev/null || true)
-          echo "list PNGs under design/uizard/:"
+          echo "PNG (design/uizard/):"
           (ls -1 design/uizard/*.png 2>/dev/null || true)
 
       - name: Install deps (pnpm or npm)
@@ -234,7 +242,6 @@ PY
           fi
           gh pr merge "${PR_NUMBER}" --auto --squash || true
 
-      # ---- NEW: ensures we always get a final log line even on odd skip cases ----
       - name: Always finish
         if: ${{ always() }}
         run: echo "🏁 design-sync-v3 finished"
