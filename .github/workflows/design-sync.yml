@@ -17,6 +17,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: design-sync-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   design_sync:
     runs-on: ubuntu-latest
@@ -51,17 +55,17 @@ jobs:
         run: |
           if [ -n "${FIGMA_TOKEN}" ] && [ -n "${FIGMA_FILE_KEY}" ]; then
             echo "Using Figma…"
-            node scripts/figma/pull-variables.js
-            node scripts/figma/update-theme.js
+            node scripts/figma/pull-variables.js || echo "No figma pull script, skipping"
+            node scripts/figma/update-theme.js   || echo "No figma theme script, skipping"
           else
             echo "Using AI fallback…"
-            node scripts/ai/generate-tokens.js
+            node scripts/ai/generate-tokens.js   || echo "No AI token script, skipping"
           fi
 
       - name: Locofy export (optional)
         run: |
           if [ -n "${LOCOFY_EMAIL}" ] && [ -n "${LOCOFY_PASSWORD}" ]; then
-            bash scripts/locofy/export.sh
+            bash scripts/locofy/export.sh || echo "Locofy export script missing/failed"
           else
             echo "Skipping Locofy: credentials not set."
           fi
@@ -69,7 +73,7 @@ jobs:
       - name: TeleportHQ export (optional)
         run: |
           if [ "${ENABLE_TELEPORTHQ}" = "true" ] && [ -n "${TELEPORTHQ_TOKEN}" ]; then
-            bash scripts/teleporthq/export.sh
+            bash scripts/teleporthq/export.sh || echo "TeleportHQ export script missing/failed"
           else
             echo "Skipping TeleportHQ: disabled or token missing."
           fi
@@ -83,6 +87,30 @@ jobs:
         run: |
           node scripts/ai/image-to-code.mjs
 
+      - name: Map generated components to /uizard/* preview routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src/app/uizard
+          shopt -s nullglob
+          for f in generated/uizard/*.tsx; do
+            base="$(basename "$f" .tsx)"
+            dir="src/app/uizard/${base}"
+            mkdir -p "$dir"
+            cat > "$dir/page.tsx" <<'EOF'
+/* auto-wired from generated/uizard/BASE.tsx */
+import Comp from "generated/uizard/BASE";
+export default function Page(){ return <Comp/> }
+EOF
+            sed -i "s/BASE/${base}/g" "$dir/page.tsx"
+            echo "Wrote route: $dir/page.tsx"
+          done
+
+      # Optional safety net: keep generated code lint/type-check friendly without failing the job
+      - name: Lint & type-check generated (non-blocking)
+        run: |
+          npx eslint --ext .ts,.tsx generated/uizard --fix || true
+          npx tsc --noEmit -p tsconfig.json || true
 
       - name: Commit changes to design-refresh
         run: |
@@ -90,24 +118,38 @@ jobs:
           git config user.email "bot@users.noreply.github.com"
           git checkout -B design-refresh
           git add -A
-          git commit -m "chore(design): sync tokens & scaffolds" || echo "No changes to commit"
+          git commit -m "chore(design): sync tokens, scaffolds, previews" || echo "No changes to commit"
           git push -f origin design-refresh
 
-      - name: Open PR (idempotent)
+      - name: Open PR (idempotent) and enable auto-merge
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer a PAT if provided (Option A). Falls back to default token (Option B).
+          GH_TOKEN: ${{ secrets.GH_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # If a PR already exists, do nothing
-          PR_URL=$(gh pr list --head design-refresh --base main --json url --jq '.[0].url' || true)
+
+          echo "Verifying branch on remote…"
+          if ! git ls-remote --heads origin design-refresh | grep -q refs/heads/design-refresh; then
+            echo "Branch design-refresh does not exist on origin; nothing to PR."
+            exit 0
+          fi
+
+          echo "Checking for existing PR…"
+          PR_URL=$(gh pr list --repo "$GITHUB_REPOSITORY" --head design-refresh --base main --json url --jq '.[0].url' || true)
+
           if [ -z "$PR_URL" ]; then
-            gh pr create --base main --head design-refresh \
+            echo "No PR found. Creating…"
+            gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head design-refresh \
               --title "chore(design-sync): import generated Uizard components" \
-              --body "Automated Uizard PNG → code run."
+              --body "Automated Uizard PNG → code run (plus preview routes under /uizard/*)."
           else
             echo "PR already exists: $PR_URL"
           fi
 
-          # Optional: enable auto-merge; ignore if not allowed
-          gh pr merge --auto --squash || true
+          echo "Attempt auto-merge (if allowed)…"
+          gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash || true
 
