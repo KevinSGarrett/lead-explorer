@@ -85,5 +85,128 @@ jobs:
           echo "ANTHROPIC_API_KEY set? $([ -n "${ANTHROPIC_API_KEY:-}" ] && echo yes || echo no)"
           echo "List design PNGs:"; (ls -1 design/uizard/*.png 2>/dev/null || echo "(none)")
 
+      - name: Install deps (pnpm or npm)
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable || true
+          if command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Generate components from all Uizard PNGs
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          GEN_COUNT=0
+          for PNG in design/uizard/*.png; do
+            echo "Generating from: $PNG"
+            node scripts/ai/image-to-code.mjs "$PNG"
+            GEN_COUNT=$((GEN_COUNT+1))
+          done
+          echo "Generated from $GEN_COUNT PNG(s)."
+
+      - name: Auto-clientize hook-using files
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_DIR="generated/uizard"
+          [ -d "$TARGET_DIR" ] || exit 0
+          tmp="$(mktemp)"
+          for f in "$TARGET_DIR"/*.tsx; do
+            [ -f "$f" ] || continue
+            if grep -Eq 'from "react"|from '\''react'\''|use(State|Effect|Ref)\b' "$f"; then
+              # If file doesn't already start with "use client"
+              if ! head -n1 "$f" | grep -q '^"use client"'; then
+                printf '%s\n%s\n' '"use client"' "$(cat "$f")" > "$tmp" && mv "$tmp" "$f"
+                echo "Inserted \"use client\" into: $f"
+              fi
+            fi
+          done
+
+      - name: Auto-wire preview routes under /uizard/*
+        shell: bash
+        run: |
+          set -euo pipefail
+          TSX_DIR="generated/uizard"
+          APP_DIR="src/app/uizard"
+          mkdir -p "$APP_DIR"
+          if [ -d "$TSX_DIR" ]; then
+            for f in "$TSX_DIR"/*.tsx; do
+              [ -e "$f" ] || continue
+              base="$(basename "$f" .tsx)"
+              route="$APP_DIR/$base/page.tsx"
+              if [ ! -f "$route" ]; then
+                mkdir -p "$(dirname "$route")"
+                cat > "$route" <<ROUTE
+import Component from '@/../generated/uizard/${base}';
+
+export default function Page() {
+  return <Component />;
+}
+ROUTE
+                echo "Created route: $route"
+              else
+                echo "Route exists: $route"
+              fi
+            done
+          else
+            echo "No $TSX_DIR directory; skipping route wiring."
+          fi
+
+      - name: Create/Update branch 'design-refresh' with changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "automation-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit on design-refresh."
+          else
+            git fetch origin +refs/heads/design-refresh:refs/remotes/origin/design-refresh || true
+            git checkout -B design-refresh
+            git commit -m "chore(design-sync): tokens/code/routes update"
+            git push -f origin design-refresh
+          fi
+
+      - name: Verify bot token scopes
+        env: { GH_TOKEN: ${{ secrets.PR_BOT_TOKEN }} }
+        run: gh api rate_limit >/dev/null && echo "PR_BOT_TOKEN OK"
+
+
+      - name: Open or update PR to main (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.PR_BOT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PR_URL=$(gh pr list --head design-refresh --base main --json url --jq '.[0].url' || true)
+          if [ -z "$PR_URL" ]; then
+            PR_URL=$(gh pr create --base main --head design-refresh \
+              --title "chore(design-sync): import generated design assets" \
+              --body "Automated Uizard → React/Tailwind; tokens + routes wired. CI will run via ai-build and auto-merge on green." \
+              --label "auto" --label "design-sync")
+          else
+            gh pr edit "$PR_URL" --add-label "auto" --add-label "design-sync" || true
+          fi
+          # Try to auto-merge; if branch protection delays it, GH will merge on green
+          gh pr merge "$PR_URL" --auto --squash || true
+          echo "PR: $PR_URL"
+
+      - name: Trigger AI Build workflow (repo_dispatch)
+        if: always()
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PR_BOT_TOKEN }}
+          event-type: ai-build
+          client-payload: |
+            {"ref":"design-refresh"}
+
+
       - name: Done
         run: echo "✅ design-sync-v3 pipeline scaffold OK"
