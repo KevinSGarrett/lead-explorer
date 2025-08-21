@@ -93,3 +93,21 @@ jobs:
           git commit -m "chore(design): sync tokens & scaffolds" || echo "No changes to commit"
           git push -f origin design-refresh
 
+      - name: Open PR (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # If a PR already exists, do nothing
+          PR_URL=$(gh pr list --head design-refresh --base main --json url --jq '.[0].url' || true)
+          if [ -z "$PR_URL" ]; then
+            gh pr create --base main --head design-refresh \
+              --title "chore(design-sync): import generated Uizard components" \
+              --body "Automated Uizard PNG → code run."
+          else
+            echo "PR already exists: $PR_URL"
+          fi
+
+          # Optional: enable auto-merge; ignore if not allowed
+          gh pr merge --auto --squash || true
+
