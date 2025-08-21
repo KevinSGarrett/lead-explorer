@@ -2,6 +2,12 @@ name: Design Code Sync v3
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref/branch to sync (defaults to current)"
+        required: false
+  repository_dispatch:
+    types: [design-sync]
   push:
     branches:
       - chore/ci-automation
@@ -41,9 +47,24 @@ jobs:
       ENABLE_CREWAI: ${{ vars.ENABLE_CREWAI || 'false' }}
       CREWAI_CONFIG: ${{ vars.CREWAI_CONFIG || 'scripts/crewai/design.yml' }}
 
+      # resolve the requested ref for checkout
+      INPUT_REF: ${{ github.event.inputs.ref }}
+      PAYLOAD_REF: ${{ github.event.client_payload.ref }}
+
     steps:
+      - name: Resolve ref to checkout
+        id: refsel
+        run: |
+          REF="${INPUT_REF}"
+          if [ -z "$REF" ]; then REF="${PAYLOAD_REF}"; fi
+          if [ -z "$REF" ]; then REF="${GITHUB_REF_NAME}"; fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Using ref: $REF"
+
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.refsel.outputs.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -53,8 +74,7 @@ jobs:
 
       - name: Debug context
         run: |
-          echo "ref: $GITHUB_REF"
-          echo "ref_name: $GITHUB_REF_NAME"
+          echo "ref (resolved): ${{ steps.refsel.outputs.ref }}"
           echo "sha: $GITHUB_SHA"
           echo "list PNGs under design/:"
           (ls -1 design/*.png 2>/dev/null || true)
@@ -114,13 +134,11 @@ jobs:
             echo "Generator scripts/ai/image-to-code.mjs not found — skipping."
             exit 0
           fi
-
           mapfile -t PNGS < <(find design -maxdepth 2 -type f -name '*.png' 2>/dev/null || true)
           if [ "${#PNGS[@]}" -eq 0 ]; then
             echo "No Uizard PNGs found under design/ — skipping generator."
             exit 0
           fi
-
           echo "Found ${#PNGS[@]} PNG(s). Running generator for each…"
           ok=0; fail=0
           for f in "${PNGS[@]}"; do
@@ -191,7 +209,6 @@ PY
           GH_DEFAULT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-
           if [ -n "${PR_BOT_TOKEN:-}" ]; then
             export GH_TOKEN="${PR_BOT_TOKEN}"
             echo "Using PR_BOT_TOKEN for PR operations."
@@ -199,23 +216,17 @@ PY
             export GH_TOKEN="${GH_DEFAULT_TOKEN}"
             echo "PR_BOT_TOKEN not set; using default GITHUB_TOKEN (may lack permissions)."
           fi
-
           PR_NUMBER="$(gh pr view design-refresh --base main --json number -q .number || true)"
           if [ -z "${PR_NUMBER}" ]; then
-            echo "No existing PR — creating…"
-            gh pr create \
-              --base main \
-              --head design-refresh \
+            gh pr create --base main --head design-refresh \
               --title "chore(design-sync): import generated UI & tokens (CrewAI=${ENABLE_CREWAI})" \
               --body "Automated Uizard PNG → code, optional CrewAI orchestration, clientization, and token sync." \
               --label "design-sync,auto-generated" \
               --draft=false
             PR_NUMBER="$(gh pr view design-refresh --base main --json number -q .number)"
           else
-            echo "PR #${PR_NUMBER} already exists — updating labels/body…"
             gh pr edit "${PR_NUMBER}" --add-label "design-sync"
           fi
-
           gh pr merge "${PR_NUMBER}" --auto --squash || true
 
   trigger_ai_build:
